@@ -1,0 +1,9 @@
+rgdb
+====
+
+Remote debugging using gdb with graphical code breaks and stepping
+
+	You'll be prompted on first run for a code path and tag file. The code path is where rgdb searches for source code files when it encounters a filename in gdb output. For example, ~/code could be the base directory where you store all your source files.
+
+	The tag file property refers to your ctags file. Having a ctags file improves the speed and accuracy of file searches, but is not required.
+
