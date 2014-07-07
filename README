@@ -3,6 +3,13 @@ rgdb
 
 Remote debugging using gdb with graphical code breaks and stepping
 
+To run rgdb, simply execute rgdb.py:
+
+    chmod a+x rgdb.py
+    ./rgdb.py 10.5.37.60 /var/root/remote_executable_path
+
+It helps if you have ssh keys setup, so that you won't need to enter your login credentials every time you execute rgdb.
+
 	You'll be prompted on first run for a code path and tag file. The code path is where rgdb searches for source code files when it encounters a filename in gdb output. For example, ~/code could be the base directory where you store all your source files.
 
 	The tag file property refers to your ctags file. Having a ctags file improves the speed and accuracy of file searches, but is not required.
