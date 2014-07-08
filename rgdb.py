@@ -1,7 +1,5 @@
 #!/usr/bin/python
 import paramiko, sys, time, re, zmq, os, readline, random, signal, getpass, pickle
-from subprocess import Popen, PIPE
-from multiprocessing import Process
 
 class gdb:
     def __init__(self, args, host, user='root'):
