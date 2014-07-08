@@ -73,10 +73,19 @@ class gdb:
     def line(self, command):
         self.channel.send('%s\n' % command.strip())
         data = self.__wait_gdb__()
-        print data
+
+        ending_data = data.replace('\r', '').split('\n\n')[-1].strip()
+        if ending_data:
+            print ending_data
+        else:
+            print data
 
         changed_files = re.findall('([a-zA-Z0-9_:]+) \([^\)]*\) at ([^:]+):(\d+)', data)
+        if not changed_files and ending_data:
+            changed_files = re.findall('([a-zA-Z0-9_:]+) \(.*\) at ([^:]+):(\d+)', ending_data)
         in_file = re.findall('(\d+)[ \t]+in[ \t]+([^:]+)', data)
+        if not in_file and ending_data:
+            re.findall('(\d+)[ \t]+in[ \t]+([^:]+)', ending_data)
         if in_file:
             try:
                 self.location = os.path.basename(in_file[-1][1]).strip()
