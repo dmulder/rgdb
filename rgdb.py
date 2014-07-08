@@ -192,11 +192,7 @@ def debugger(con):
         while not 'code_path' in settings.keys() or not settings['code_path']:
             settings['code_path'] = raw_input('Enter a base path for your code directory: ')
         settings['tags_file'] = raw_input('Enter a tag file path (optional): ')
-        while not 'reverse' in settings.keys():
-            try:
-                settings['reverse'] = True if raw_input('Enable reverse debugging (true/false)? ').lower() == 'true' else False
-            except:
-                pass
+        settings['reverse'] = True if raw_input('Enable reverse debugging (true/false)? ').lower() == 'true' else False
         pickle.dump(settings, open(settings_path, 'w'))
     else:
         settings = pickle.load(open(settings_path, 'r'))
