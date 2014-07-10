@@ -208,7 +208,10 @@ def tcpdump_load(ssh, pid):
 
 def debugger(con):
     settings = None
-    settings_path = os.path.join(os.path.dirname(sys.argv[0]), 'rgdb_settings')
+    settings_dir = os.path.join(os.path.expanduser('~'), '.config/rgdb/')
+    if not os.path.exists(settings_dir):
+        os.makedirs(settings_dir)
+    settings_path = os.path.join(settings_dir, 'rgdb_settings')
     if not os.path.exists(settings_path):
         settings = {}
         while not 'code_path' in settings.keys() or not settings['code_path']:
@@ -221,11 +224,13 @@ def debugger(con):
 
     debug_id = random.randint(5000, 6000)
     rc = None
-    ui = os.path.join(os.path.dirname(sys.argv[0]), 'rgdb_ui.py')
+    ui = os.path.join(os.path.dirname(sys.argv[0]), 'rgdb_ui')
+    if not os.path.exists(ui):
+        ui = 'python %s' % os.path.join(os.path.dirname(sys.argv[0]), 'rgdb_ui.py')
     if os.system('which gnome-terminal >/dev/null') == 0:
-        rc = os.system('gnome-terminal --title="Remote GDB %s (Editor)" -x python %s %d 2>/dev/null' % (con.binary, ui, debug_id))
+        rc = os.system('gnome-terminal --title="Remote GDB %s (Editor)" -x %s %d 2>/dev/null' % (con.binary, ui, debug_id))
     else:
-        rc = os.system('xterm -T "Remote GDB %s (Editor)" -bg white -fg black -fn 9x15 -e python %s %d 2>/dev/null &' % (con.binary, ui, debug_id))
+        rc = os.system('xterm -T "Remote GDB %s (Editor)" -bg white -fg black -fn 9x15 -e %s %d 2>/dev/null &' % (con.binary, ui, debug_id))
     if rc != 0:
         exit(rc)
     code_path = settings['code_path']

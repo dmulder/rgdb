@@ -14,4 +14,13 @@ It helps if you have ssh keys setup, so that you won't need to enter your login 
 
 	The tag file property refers to your ctags file. Having a ctags file improves the speed and accuracy of file searches, but is not required.
 
+To install on openSUSE:
+
+    sudo zypper ar http://download.opensuse.org/repositories/home:/dmulder/openSUSE_13.1/ rgdb
+    sudo zypper in rgdb
+
+You can now run rgdb from the command line:
+
+    /usr/bin/rgdb
+
 http://mytechinsights.wordpress.com/2014/07/08/rgdb-remote-debugging/
