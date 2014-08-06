@@ -34,6 +34,7 @@ class gdb:
         self.host = host
         self.location = ''
         self.uname = ''
+        self.debugger = 'gdb'
         self.__connect__(user)
         signal.signal(signal.SIGINT, self.stop)
 
@@ -45,18 +46,21 @@ class gdb:
         except:
             self.ssh.connect(self.host, username=raw_input('Username: '), password=getpass.getpass('Password: '))
         self.uname = self.ssh.exec_command('uname')[1].read().strip()
+        if self.uname == 'Darwin':
+            self.debugger = 'lldb'
         self.binary = 'None' if not self.args else self.args[0] if int(self.ssh.exec_command('file %s >/dev/null; echo $?' % self.args[0])[1].read().strip()) == 0 else 'None'
         self.channel = self.ssh.invoke_shell()
         self.channel.resize_pty(width=500, height=500)
         self.channel.recv(2048)
-        self.channel.send('gdb %s\n' % ' '.join(self.args))
+        self.channel.send('%s %s\n' % (self.debugger, ' '.join(self.args)))
         self.__wait_gdb__()
         # Disable hardware watch points (use software watchpoints instead)
-        self.channel.send('set can-use-hw-watchpoints 0\n')
-        self.__wait_gdb__()
+        if self.debugger == 'gdb':
+            self.channel.send('set can-use-hw-watchpoints 0\n')
+            self.__wait_gdb__()
 
     def EOF(self):
-        children = self.ssh.exec_command('ps -eo pid,command | grep "gdb %s" | grep -v grep' % ' '.join(self.args))[1].read().strip().split('\n')
+        children = self.ssh.exec_command('ps -eo pid,command | grep "%s %s" | grep -v grep' % (self.debugger, ' '.join(self.args)))[1].read().strip().split('\n')
         if len(children) == 1:
             try:
                 self.ssh.exec_command('kill -9 %s' % children[0].split()[0])
@@ -74,7 +78,7 @@ class gdb:
 
     def __wait_gdb__(self):
         data = ''
-        while not any([stop in data.strip().split('\n')[-1] for stop in ['(gdb)', '(y or n)', '(y or [n])']]):
+        while not any([stop in data.strip().split('\n')[-1] for stop in ['(%s)' % self.debugger, '(y or n)', '(y or [n])']]):
             if self.channel.recv_ready():
                 data += self.channel.recv(2048)
             time.sleep(.1)
@@ -88,18 +92,42 @@ class gdb:
         self.ssh.close()
 
     def send(self, command):
-        self.channel.send('%s\n' % command.strip())
+        if self.debugger == 'lldb':
+            if command[0] == 'break':
+                command[0] = 'b'
+            elif command[0] == 'run':
+                command[0] = 'r'
+            elif command[0] == 'attach' and re.match('^\d+$', command[1]):
+                command[0] = 'attach -p'
+            elif command[0] in ['nexti', 'stepi']:
+                command[0] = command[0][0] + command[0][-1]
+            elif command[0] == 'return':
+                command[0] = 'thread return'
+            elif command[0] == 'info' and command[1] == 'break':
+                command[0] = 'br'
+                command[1] = 'l'
+            elif command[0] == 'info' and command[1] == 'registers':
+                command[0] = 'register'
+                command[1] = 'read'
+            elif command[0] == 'delete':
+                command[0] = 'br del'
+            elif command[0] == 'watch':
+                command[0] = 'watchpoint set variable'
+            elif command[0] == 'x':
+                command[0] = 'memory read'
+                command[1] = '`%s`' % command[1]
+            elif command[0] == 'disassemble':
+                command[0] = 'disassemble --frame'
+            elif command[0] == 'inspect':
+                command[0] = 'p'
+        self.channel.send('%s\n' % ' '.join(command).strip())
         return self.__wait_gdb__()
 
     def line(self, command):
-        self.channel.send('%s\n' % command.strip())
-        data = self.__wait_gdb__()
+        data = self.send(command)
 
         ending_data = data.replace('\r', '').split('\n\n')[-1].strip()
-        if ending_data:
-            print ending_data
-        else:
-            print data
+        print data
 
         changed_files = re.findall('([a-zA-Z0-9_:]+) \([^\)]*\) at ([^:]+):(\d+)', data)
         if not changed_files and ending_data:
@@ -107,18 +135,22 @@ class gdb:
         in_file = re.findall('(\d+)[ \t]+in[ \t]+([^:]+)', data)
         if not in_file and ending_data:
             re.findall('(\d+)[ \t]+in[ \t]+([^:]+)', ending_data)
+        anything_else = list(set(re.findall('([\w\-\.]+):(\d+)[\n\r]?', data + '\n')))
         if in_file:
             try:
                 self.location = os.path.basename(in_file[-1][1]).strip()
                 return (self.location, in_file[-1][0], in_file[-1][1], None)
             except:
                 pass
-        if changed_files:
+        elif changed_files:
             try:
                 self.location = os.path.basename(changed_files[-1][1]).strip()
                 return (self.location, changed_files[-1][2], changed_files[-1][1], changed_files[-1][0])
             except:
                 pass
+        elif anything_else and len(anything_else) == 1:
+            self.location = os.path.basename(anything_else[0][0]).strip()
+            return (self.location, anything_else[0][1], anything_else[0][0], None)
         else:
             try:
                 line_num = re.findall('^(\d+)[ \t]+.+', data.strip().split('\n')[-1])[-1]
@@ -258,18 +290,18 @@ def debugger(con):
                     if len(command) > 2:
                         port = command[2]
                     tcpdump_pid = tcpdump_start(con.ssh, port)
-                    filename, line_num, full_specified_name, method = con.line(command[0])
+                    filename, line_num, full_specified_name, method = con.line([command[0]])
                     tcpdump_load(con.ssh, tcpdump_pid)
                 else:
-                    filename, line_num, full_specified_name, method = con.line(' '.join(command))
+                    filename, line_num, full_specified_name, method = con.line(command)
             elif command[0] == 'run':
-                filename, line_num, full_specified_name, method = con.line(' '.join(command))
+                filename, line_num, full_specified_name, method = con.line(command)
                 if settings['reverse']:
                     con.send('target record-full')
             elif command[0] == 'exit':
                 break
             else:
-                print con.send(' '.join(command))
+                print con.send(command)
             if filename and line_num:
                 if filename in recent_files.keys():
                     full_path = recent_files[filename]
