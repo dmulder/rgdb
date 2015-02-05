@@ -35,6 +35,7 @@ class gdb:
         self.location = ''
         self.uname = ''
         self.debugger = 'gdb'
+        self.program_output = '/tmp/rgdb_%s' % time.time()
         self.__connect__(user)
         signal.signal(signal.SIGINT, self.stop)
 
@@ -60,6 +61,7 @@ class gdb:
             self.__wait_gdb__()
 
     def EOF(self):
+        self.ssh.exec_command('rm %s' % self.program_output)
         children = self.ssh.exec_command('ps -eo pid,command | grep "%s %s" | grep -v grep' % (self.debugger, ' '.join(self.args)))[1].read().strip().split('\n')
         if len(children) == 1:
             try:
@@ -92,6 +94,11 @@ class gdb:
         self.ssh.close()
 
     def send(self, command):
+        # Pipe the output of the program into a file. This resolves some problems parsing out the gdb output vs program output.
+        if command[0] == 'run':
+            command.append('&>%s' % self.program_output)
+
+        # Modify the command if we're using lldb instead
         if self.debugger == 'lldb':
             if command[0] == 'break':
                 command[0] = 'b'
@@ -126,7 +133,19 @@ class gdb:
     def line(self, command):
         data = self.send(command)
 
+        # Remove the 'Missing separate debuginfo' messages
+        if command[0] == 'run':
+            data = '\n'.join([line for line in data.split('\n') if not line.startswith('Missing separate debuginfo for') and not line.startswith('Try: ')])
+
         ending_data = data.replace('\r', '').split('\n\n')[-1].strip()
+
+        # Display the program output which we piped into a file
+        program_output = self.ssh.exec_command('cat %s' % self.program_output)[1].read().strip()
+        if program_output:
+            sys.stdout.write('\n... ...\n%s\n... ...\n\n' % program_output)
+        self.ssh.exec_command('>%s' % self.program_output)
+
+        # Display the gdb output
         print data
 
         changed_files = re.findall('([a-zA-Z0-9_:]+) \([^\)]*\) at ([^:]+):(\d+)', data)
@@ -299,6 +318,7 @@ def debugger(con):
                 if settings['reverse']:
                     con.send('target record-full')
             elif command[0] == 'exit':
+                con.EOF()
                 break
             else:
                 print con.send(command)
@@ -313,13 +333,9 @@ def debugger(con):
                     socket.recv()
             previous = command
         except EOFError:
-            con.EOF()
             print
+            con.EOF()
             break
-    socket.send('exit')
-    socket.recv()
-    con.close()
-    socket.close()
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
