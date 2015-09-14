@@ -61,6 +61,14 @@ class gdb:
             self.channel.send('set can-use-hw-watchpoints 0\n')
             self.__wait_gdb__()
 
+    def retrieve_line_number(self):
+        line_num = re.findall('Line (\d+) of', self.send(['info', 'line']))
+        if len(line_num) == 1:
+            line_num = line_num[0].strip()
+        else:
+            return None
+        return line_num
+
     def retrieve_full_path(self, filename):
         location = re.findall('Located in (.*)', self.send(['info', 'source']))
         if len(location) == 1:
@@ -69,7 +77,7 @@ class gdb:
             raise Exception('Path to source file not found: %s', filename)
         if location in self.path_match:
             return self.path_match[location]
-        local_file = '%s/%s_%s' % (tempfile._get_default_tempdir(), next(tempfile._get_candidate_names()), filename)
+        local_file = '%s/%s_%s' % (tempfile._get_default_tempdir(), next(tempfile._get_candidate_names()), os.path.basename(location))
         sftp = paramiko.SFTPClient.from_transport(self.ssh.get_transport())
         sftp.get(remotepath=location, localpath=local_file)
         self.path_match[location] = local_file
@@ -339,11 +347,12 @@ def debugger(con):
                 break
             else:
                 print con.send(command)
-            if filename and line_num:
-                full_path = con.retrieve_full_path(filename)
-                if full_path:
-                    socket.send("%s:%s" % (full_path, line_num))
-                    socket.recv()
+
+            full_path = con.retrieve_full_path(filename)
+            line_num = con.retrieve_line_number()
+            if full_path:
+                socket.send("%s:%s" % (full_path, line_num))
+                socket.recv()
             previous = command
         except EOFError:
             print
