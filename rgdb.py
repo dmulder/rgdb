@@ -22,7 +22,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import paramiko, sys, time, re, zmq, os, readline, random, signal, getpass, pickle
+import paramiko, sys, time, re, zmq, os, readline, random, signal, getpass, pickle, tempfile
 
 class gdb:
     def __init__(self, args, host, user='root'):
@@ -36,6 +36,7 @@ class gdb:
         self.uname = ''
         self.debugger = 'gdb'
         self.program_output = '/tmp/rgdb_%s' % time.time()
+        self.path_match = {}
         self.__connect__(user)
         signal.signal(signal.SIGINT, self.stop)
 
@@ -60,7 +61,23 @@ class gdb:
             self.channel.send('set can-use-hw-watchpoints 0\n')
             self.__wait_gdb__()
 
+    def retrieve_full_path(self, filename):
+        location = re.findall('Located in (.*)', self.send(['info', 'source']))
+        if len(location) == 1:
+            location = location[0].strip()
+        else:
+            raise Exception('Path to source file not found: %s', filename)
+        if location in self.path_match:
+            return self.path_match[location]
+        local_file = '%s/%s_%s' % (tempfile._get_default_tempdir(), next(tempfile._get_candidate_names()), filename)
+        sftp = paramiko.SFTPClient.from_transport(self.ssh.get_transport())
+        sftp.get(remotepath=location, localpath=local_file)
+        self.path_match[location] = local_file
+        return local_file
+
     def EOF(self):
+        for filename in self.path_match.values():
+            os.system('rm -f %s' % filename)
         self.ssh.exec_command('rm %s' % self.program_output)
         children = self.ssh.exec_command('ps -eo pid,command | grep "%s %s" | grep -v grep' % (self.debugger, ' '.join(self.args)))[1].read().strip().split('\n')
         if len(children) == 1:
@@ -323,11 +340,7 @@ def debugger(con):
             else:
                 print con.send(command)
             if filename and line_num:
-                if filename in recent_files.keys():
-                    full_path = recent_files[filename]
-                else:
-                    full_path = find_all(filename, code_path, method, settings['tags_file'])
-                    recent_files[filename] = full_path
+                full_path = con.retrieve_full_path(filename)
                 if full_path:
                     socket.send("%s:%s" % (full_path, line_num))
                     socket.recv()
