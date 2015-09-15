@@ -3,11 +3,11 @@
 #
 
 Name:		rgdb
-Version:	1.0
+Version:	1.3
 Release:	1
 License:	MIT
 Summary:	Remote debugging using gdb
-Url:		www.github.com/DavidMulder/rgdb
+Url:		http://www.github.com/DavidMulder/rgdb
 Group:		Development/Tools/Debuggers
 Source:		%{name}-%{version}.tar.gz
 Requires:	python-pyzmq
@@ -18,6 +18,8 @@ Remote debugging using gdb with graphical code breaks and stepping.
 
 %prep
 %setup -q
+
+%build
 
 %install
 %{__install} -D -m 0755 rgdb.py $RPM_BUILD_ROOT/usr/%_lib/rgdb/rgdb.py
@@ -35,7 +37,6 @@ Remote debugging using gdb with graphical code breaks and stepping.
 /usr/%_lib/rgdb
 /usr/%_lib/rgdb/rgdb.py
 /usr/%_lib/rgdb/rgdb_ui.py
-%{_bindir}
 %{_bindir}/rgdb
 %{_bindir}/rgdb_ui
 %{_defaultdocdir}/rgdb
