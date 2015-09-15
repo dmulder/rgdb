@@ -36,11 +36,12 @@ proc = None
 while True:
 	mesg = socket.recv()
 	socket.send(mesg)
-	if (mesg and proc) or mesg == 'exit':
+	if mesg and proc:
 		# Kill the process and the spawned child (proc + 1).
 		try:
 			cproc = Popen(['grep', '-v', 'grep'], stdin=Popen(['grep', filename], stdin=Popen(['grep', '-v', '/bin/sh'], stdin=Popen(['grep', str(proc)], stdin=Popen(['ps', '-eo', 'pid,ppid,cmd'], stdout=PIPE).stdout, stdout=PIPE).stdout, stdout=PIPE).stdout, stdout=PIPE).stdout, stdout=PIPE).communicate()[0].split()[0]
 			os.system('kill -9 %s %s' % (str(proc), cproc))
+			proc = None
 			os.system('rm %s/.%s.swp' % (os.path.dirname(previous_file), os.path.basename(previous_file)))
 		except:
 			pass
@@ -52,3 +53,4 @@ while True:
 		previous_file = filename
 
 socket.close()
+

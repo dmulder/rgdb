@@ -173,36 +173,6 @@ class gdb:
         # Display the gdb output
         print data
 
-        changed_files = re.findall('([a-zA-Z0-9_:]+) \([^\)]*\) at ([^:]+):(\d+)', data)
-        if not changed_files and ending_data:
-            changed_files = re.findall('([a-zA-Z0-9_:]+) \(.*\) at ([^:]+):(\d+)', ending_data)
-        in_file = re.findall('(\d+)[ \t]+in[ \t]+([^:]+)', data)
-        if not in_file and ending_data:
-            re.findall('(\d+)[ \t]+in[ \t]+([^:]+)', ending_data)
-        anything_else = list(set(re.findall('([\w\-\.]+):(\d+)[\n\r]?', data + '\n')))
-        if in_file:
-            try:
-                self.location = os.path.basename(in_file[-1][1]).strip()
-                return (self.location, in_file[-1][0], in_file[-1][1], None)
-            except:
-                pass
-        elif changed_files:
-            try:
-                self.location = os.path.basename(changed_files[-1][1]).strip()
-                return (self.location, changed_files[-1][2], changed_files[-1][1], changed_files[-1][0])
-            except:
-                pass
-        elif anything_else and len(anything_else) == 1:
-            self.location = os.path.basename(anything_else[0][0]).strip()
-            return (self.location, anything_else[0][1], anything_else[0][0], None)
-        else:
-            try:
-                line_num = re.findall('^(\d+)[ \t]+.+', data.strip().split('\n')[-1])[-1]
-                return (self.location, line_num, '/tmp/null', None)
-            except:
-                pass
-        return (None, None, None, None)
-
 def find_all(name, path, method, tags_file):
     result = []
     for root, dirs, files in os.walk(path, followlinks=True):
@@ -315,13 +285,17 @@ def debugger(con):
     socket = context.socket(zmq.REQ)
     socket.connect("tcp://127.0.0.1:%d" % debug_id)
     con.socket = socket
-    filename = None
     full_specified_name = None
     recent_files = {}
-    line_num = None
     previous = None
     method = None
+    previous_line_num = None
+    previous_filename = None
     while True:
+        filename = None
+        line_num = None
+
+        check_line = False
         try:
             command = raw_input('(rgdb) ').strip().split()
             if not command:
@@ -329,17 +303,19 @@ def debugger(con):
             if not command:
                 continue
             if command[0] in ['next', 'step', 'continue', 'finish'] or 'reverse' in command[0]:
+                check_line = True
                 if len(command) > 1 and command[1] == 'tcpdump':
                     port = None
                     if len(command) > 2:
                         port = command[2]
                     tcpdump_pid = tcpdump_start(con.ssh, port)
-                    filename, line_num, full_specified_name, method = con.line([command[0]])
+                    con.line([command[0]])
                     tcpdump_load(con.ssh, tcpdump_pid)
                 else:
-                    filename, line_num, full_specified_name, method = con.line(command)
+                    con.line(command)
             elif command[0] == 'run':
-                filename, line_num, full_specified_name, method = con.line(command)
+                check_line = True
+                con.line(command)
                 if settings['reverse']:
                     con.send('target record-full')
             elif command[0] == 'exit':
@@ -348,11 +324,15 @@ def debugger(con):
             else:
                 print con.send(command)
 
-            full_path = con.retrieve_full_path(filename)
-            line_num = con.retrieve_line_number()
-            if full_path:
-                socket.send("%s:%s" % (full_path, line_num))
-                socket.recv()
+            if check_line:
+                line_num = con.retrieve_line_number()
+                full_path = con.retrieve_full_path(filename)
+                if full_path and line_num:
+                    if (line_num != previous_line_num and previous_filename == full_path) or previous_filename != full_path:
+                        previous_line_num = line_num
+                        previous_filename = full_path
+                        socket.send("%s:%s" % (full_path, line_num))
+                        socket.recv()
             previous = command
         except EOFError:
             print
