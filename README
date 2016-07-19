@@ -18,6 +18,10 @@ To install on openSUSE:
 
     sudo zypper ar http://download.opensuse.org/repositories/home:/dmulder/openSUSE_13.1/ rgdb
     sudo zypper in rgdb
+    
+Or use the yast 1 click installer here:
+
+    http://software.opensuse.org/package/rgdb?search_term=rgdb
 
 You can now run rgdb from the command line:
 
