@@ -22,15 +22,49 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import paramiko, sys, time, re, zmq, os, readline, random, signal, getpass, pickle, tempfile, argparse, pty
+import paramiko, sys, time, re, zmq, os, readline, random, signal, getpass, pickle, tempfile, argparse, pty, errno
+from functools import wraps
 from subprocess import Popen, PIPE
+
+# http://stackoverflow.com/questions/2281850/timeout-function-if-it-takes-too-long-to-finish
+class TimeoutError(Exception):
+    pass
+
+def timeout(seconds=10, error_message=os.strerror(errno.ETIME)):
+    def decorator(func):
+        def _handle_timeout(signum, frame):
+            raise TimeoutError(error_message)
+
+        def wrapper(*args, **kwargs):
+            signal.signal(signal.SIGALRM, _handle_timeout)
+            signal.alarm(seconds)
+            try:
+                result = func(*args, **kwargs)
+            finally:
+                signal.alarm(0)
+            return result
+
+        return wraps(func)(wrapper)
+
+    return decorator
 
 class gdb:
     def __init__(self, args):
         self.args = args
         self.debugger = 'gdb'
+        self.uname = self.__exec__('uname').strip()
+        if self.uname == 'Darwin':
+            self.debugger = 'lldb'
         self.program_output = '/tmp/rgdb_%s' % time.time()
         signal.signal(signal.SIGINT, self.stop)
+        self.binary = 'None' if not self.args else self.args[0] if self.__host_file_exists__(self.args[0]) else 'None'
+
+    def __connect__(self):
+        self.__wait_gdb__()
+        # Disable hardware watch points (use software watchpoints instead)
+        if self.debugger == 'gdb':
+            self.__send__('set can-use-hw-watchpoints 0\n')
+            self.__wait_gdb__()
 
     def retrieve_line_number(self):
         line_num = re.findall('Line (\d+) of', self.send(['info', 'line']))
@@ -99,10 +133,10 @@ class gdb:
         ending_data = data.replace('\r', '').split('\n\n')[-1].strip()
 
         # Display the program output which we piped into a file
-        program_output = self.__exec__('cat %s' % self.program_output)
+        program_output = self.__cat_file__(self.program_output)
         if program_output:
             sys.stdout.write('\n... ...\n%s\n... ...\n\n' % program_output)
-        self.__exec__('>%s' % self.program_output)
+        self.__blank_file__(self.program_output)
 
         # Display the gdb output
         print data
@@ -117,6 +151,10 @@ class gdb:
     def stop(self, signal, frame):
         self.close()
 
+@timeout(1) # timeout after 1 second if read() doesn't respond
+def timeout_recv(stdout):
+    return stdout.read(1)
+
 ''' Local gdb connection '''
 class lgdb(gdb):
     def __init__(self, args):
@@ -124,10 +162,16 @@ class lgdb(gdb):
         self.p = None
         self.stdin = None
         self.stdout = None
+        self.host = 'localhost'
+        self.__connect__()
+        gdb.__connect__(self)
 
     def __connect__(self):
         master, slave = pty.openpty()
-        self.p = Popen([self.debugger].extend(self.args), shell=True, stdin=PIPE, stdout=slave)
+        cmd = [self.debugger]
+        if self.args:
+            cmd.extend(self.args)
+        self.p = Popen(cmd, shell=True, stdin=PIPE, stdout=slave)
         self.stdin = self.p.stdin
         self.stdout = os.fdopen(master)
 
@@ -142,26 +186,30 @@ class lgdb(gdb):
     def __recv_ready__(self):
         return True
 
-# implement a timer to kill the non-returning read():
-# http://stackoverflow.com/questions/2281850/timeout-function-if-it-takes-too-long-to-finish
     def __recv__(self):
-        #return self.channel.recv(2048)
         data = ''
-        try:
-            while True:
-                data += self.sdout.read(1)
-        except:
-            pass # Timed out, ignore and return the read response
+        while True:
+            try:
+                data += timeout_recv(self.stdout)
+            except TimeoutError:
+                break
         return data
 
     def __exec__(self, cmd):
-        return Popen(cmd, stdout=PIPE).communicate()[0]
+        return Popen(cmd.split(' '), stdout=PIPE).communicate()[0]
+
+    def __host_file_exists__(self, filename):
+        return os.path.exists(filename)
+
+    def __blank_file__(self, filename):
+        open(filename, 'w').truncate(0)
+
+    def __cat_file__(self, filename):
+        return open(filename, 'r').read()
 
 ''' Remote gdb connection '''
 class rgdb(gdb):
-    def __init__(self, args, host, user='root'):
-        gdb.__init__(self, args)
-        self.ssh = None
+    def __init__(self, args, host, user='root', password=None):
         self.channel = None
         self.socket = None
         self.pid = ''
@@ -169,31 +217,21 @@ class rgdb(gdb):
         self.location = ''
         self.uname = ''
         self.path_match = {}
-        self.__connect__(user)
-
-    def __connect__(self, user='root'):
         self.ssh = paramiko.SSHClient()
         self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         try:
-            self.ssh.connect(self.host, username=user)
+            self.ssh.connect(self.host, username=user, password=password)
         except:
             try:
                 self.ssh.connect(self.host, username=user, password=getpass.getpass('%s\'s password: ' % user))
             except paramiko.ssh_exception.NoValidConnectionsError as e:
                 exit(e)
-        self.uname = self.ssh.exec_command('uname')[1].read().strip()
-        if self.uname == 'Darwin':
-            self.debugger = 'lldb'
-        self.binary = 'None' if not self.args else self.args[0] if int(self.ssh.exec_command('file %s >/dev/null; echo $?' % self.args[0])[1].read().strip()) == 0 else 'None'
+        gdb.__init__(self, args)
         self.channel = self.ssh.invoke_shell()
         self.channel.resize_pty(width=500, height=500)
         self.channel.recv(2048)
         self.channel.send('%s %s\n' % (self.debugger, ' '.join(self.args)))
-        self.__wait_gdb__()
-        # Disable hardware watch points (use software watchpoints instead)
-        if self.debugger == 'gdb':
-            self.channel.send('set can-use-hw-watchpoints 0\n')
-            self.__wait_gdb__()
+        gdb.__connect__(self)
 
     def retrieve_full_path(self, filename):
         location = gdb.retrieve_full_path(self, filename)
@@ -208,18 +246,14 @@ class rgdb(gdb):
     def close(self):
         for filename in self.path_match.values():
             os.system('rm -f %s' % filename)
-        self.ssh.exec_command('rm %s' % self.program_output)
-        children = self.ssh.exec_command('ps -eo pid,command | grep "%s %s" | grep -v grep' % (self.debugger, ' '.join(self.args)))[1].read().strip().split('\n')
+        self.__exec__('rm %s' % self.program_output)
+        children = self.__exec__('ps -eo pid,command | grep "%s %s" | grep -v grep' % (self.debugger, ' '.join(self.args))).split('\n')
         if len(children) == 1:
             try:
-                self.ssh.exec_command('kill -9 %s' % children[0].split()[0])
+                self.__exec__('kill -9 %s' % children[0].split()[0])
             except:
                 pass
         self.ssh.close()
-        if self.socket:
-            self.socket.send('exit')
-            self.socket.recv()
-            self.socket.close()
         exit(1)
 
     def __send__(self, msg):
@@ -233,6 +267,15 @@ class rgdb(gdb):
 
     def __exec__(self, cmd):
         return self.ssh.exec_command(cmd)[1].read().strip()
+
+    def __host_file_exists__(self, filename):
+        return int(self.__exec__('file %s >/dev/null; echo $?' % filename)) == 0
+
+    def __blank_file__(self, filename):
+        self.__exec__('>%s' % filename)
+
+    def __cat_file__(self, filename):
+        return self.__exec__('cat %s' % filename)
 
 def find_all(name, path, method, tags_file):
     result = []
@@ -345,7 +388,6 @@ def debugger(con):
     context = zmq.Context()
     socket = context.socket(zmq.REQ)
     socket.connect("tcp://127.0.0.1:%d" % debug_id)
-    con.socket = socket
     full_specified_name = None
     recent_files = {}
     previous = None
@@ -365,7 +407,7 @@ def debugger(con):
                 continue
             if command[0] in ['next', 'step', 'continue', 'finish'] or 'reverse' in command[0]:
                 check_line = True
-                if len(command) > 1 and command[1] == 'tcpdump':
+                if len(command) > 1 and command[1] == 'tcpdump' and con.ssh:
                     port = None
                     if len(command) > 2:
                         port = command[2]
@@ -379,7 +421,7 @@ def debugger(con):
                 con.line(command)
                 if settings['reverse']:
                     con.send('target record-full')
-            elif command[0] == 'exit':
+            elif command[0] == 'exit' or command[0] == 'quit':
                 con.close()
                 break
             else:
@@ -397,14 +439,18 @@ def debugger(con):
             previous = command
         except EOFError:
             print
+            socket.send('exit')
+            socket.recv()
+            socket.close()
             con.close()
             break
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="\tYou\'ll be prompted on first run for a code path and tag file. The code path is where rgdb searches for source code files when it encounters a filename in gdb output. For example, ~/code could be the base directory where you store all your source files.\n\tThe tag file property refers to your ctags file. Having a ctags file improves the speed and accuracy of file searches, but is not required.", formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--user', '-u', help='Username for authentication')
-    parser.add_argument('machine', help='The machine to attach to and run gdb')
-    parser.add_argument('gdb_args', nargs='*', help='Arguments that will be passed to gdb')
+    parser.add_argument('--password', '-w', help='Password for authentication')
+    parser.add_argument('--localhost', '-l', help='Run this command on the localhost', action='store_true')
+    parser.add_argument('args', nargs='*', help='If this is a remote call, the first argument must be a hostname for the connection. All preceding arguments will be passed to gdb.')
 
     args = parser.parse_args()
 
@@ -413,5 +459,10 @@ if __name__ == "__main__":
     else:
         user = getpass.getuser()
 
-    con = rgdb(args.gdb_args, args.machine, user)
+    if args.localhost:
+        con = lgdb(args.args)
+    else:
+        con = rgdb(args.args[1:], args.args[0], user, args.password)
+
     debugger(con)
+
