@@ -12,6 +12,7 @@ Group:		Development/Tools/Debuggers
 Source:		%{name}-%{version}.tar.gz
 Requires:	python-pyzmq
 Requires:	python-paramiko
+Requires:	python-gtksourceview
 
 %description
 Remote debugging using gdb with graphical code breaks and stepping.
