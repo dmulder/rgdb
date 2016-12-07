@@ -450,7 +450,7 @@ if __name__ == "__main__":
     parser.add_argument('--user', '-u', help='Username for authentication')
     parser.add_argument('--password', '-w', help='Password for authentication')
     parser.add_argument('--localhost', '-l', help='Run this command on the localhost', action='store_true')
-    parser.add_argument('args', nargs='*', help='If this is a remote call, the first argument must be a hostname for the connection. All preceding arguments that will be passed to gdb.')
+    parser.add_argument('args', nargs='*', help='If this is a remote call, the first argument must be a hostname for the connection. All preceding arguments will be passed to gdb.')
 
     args = parser.parse_args()
 
